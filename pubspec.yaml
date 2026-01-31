@@ -9,7 +9,16 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  intl: ^0.19.0  # هذه هي المكتبة التي كنت تحاول إضافتها
+  # التاريخ والأرقام
+  intl: ^0.19.0
+  # قاعدة البيانات المحلية (سريعة جداً)
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  # التعامل مع ملفات الإكسل
+  excel: ^4.0.0
+  # الوصول لملفات الهاتف والمشاركة
+  path_provider: ^2.1.2
+  share_plus: ^9.0.0
   cupertino_icons: ^1.0.6
 
 dev_dependencies:

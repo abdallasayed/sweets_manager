@@ -1,7 +1,19 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
+import 'package:hive_flutter/hive_flutter.dart';
+import 'package:excel/excel.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
-void main() {
+// اسم صندوق البيانات
+const String kInvoicesBox = 'invoices_box';
+
+void main() async {
+  // تهيئة Hive (قاعدة البيانات) قبل تشغيل التطبيق
+  await Hive.initFlutter();
+  await Hive.openBox(kInvoicesBox);
+  
   runApp(const MyApp());
 }
 
@@ -16,12 +28,11 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF673AB7), // لون بنفسجي ملكي
-          secondary: const Color(0xFFFFC107), // لون ذهبي للحلويات
+          seedColor: const Color(0xFF673AB7),
+          secondary: const Color(0xFFFFC107),
         ),
-        fontFamily: 'Cairo', // يفضل إضافة خط عربي لاحقاً
+        fontFamily: 'Cairo',
       ),
-      // دعم اللغة العربية
       builder: (context, child) {
         return Directionality(textDirection: TextDirection.rtl, child: child!);
       },
@@ -30,34 +41,40 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// --- MODELS (بيانات النظام) ---
+// --- MODELS ---
 
-// نوع الصاج
 class TrayType {
   final String id;
   final String name;
-  final double defaultWeight; // وزن الصاج فارغ بالكيلو
+  final double defaultWeight;
 
   TrayType({required this.id, required this.name, required this.defaultWeight});
+  
+  // تحويل لـ JSON للحفظ
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'defaultWeight': defaultWeight};
+  factory TrayType.fromJson(Map<String, dynamic> json) => 
+      TrayType(id: json['id'], name: json['name'], defaultWeight: json['defaultWeight']);
 }
 
-// نوع الحلوى
 class SweetType {
   final String id;
   final String name;
-  final double price; // السعر للكيلو
+  final double price;
 
   SweetType({required this.id, required this.name, required this.price});
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'price': price};
+  factory SweetType.fromJson(Map<String, dynamic> json) => 
+      SweetType(id: json['id'], name: json['name'], price: json['price']);
 }
 
-// عنصر في الفاتورة
 class InvoiceItem {
   final String id;
   final SweetType sweet;
   final TrayType? tray;
-  final double grossWeight; // الوزن القائم
-  final double trayWeightUsed; // وزن الصاج المستخدم فعلياً
-  final bool isReturn; // هل هو مرتجع؟
+  final double grossWeight;
+  final double trayWeightUsed;
+  final bool isReturn;
 
   InvoiceItem({
     required this.id,
@@ -68,17 +85,33 @@ class InvoiceItem {
     required this.isReturn,
   });
 
-  // حساب الصافي
   double get netWeight => grossWeight - trayWeightUsed;
-  
-  // حساب السعر الإجمالي (سالب لو مرتجع)
   double get totalPrice {
     double value = netWeight * sweet.price;
     return isReturn ? -value : value;
   }
+
+  // تحويل البيانات لـ Map لحفظها في Hive
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'sweet': sweet.toJson(),
+    'tray': tray?.toJson(),
+    'grossWeight': grossWeight,
+    'trayWeightUsed': trayWeightUsed,
+    'isReturn': isReturn,
+  };
+
+  factory InvoiceItem.fromJson(Map<dynamic, dynamic> json) => InvoiceItem(
+    id: json['id'],
+    sweet: SweetType.fromJson(Map<String, dynamic>.from(json['sweet'])),
+    tray: json['tray'] != null ? TrayType.fromJson(Map<String, dynamic>.from(json['tray'])) : null,
+    grossWeight: json['grossWeight'],
+    trayWeightUsed: json['trayWeightUsed'],
+    isReturn: json['isReturn'],
+  );
 }
 
-// --- SCREENS (الشاشات) ---
+// --- SCREEN ---
 
 class InvoiceScreen extends StatefulWidget {
   const InvoiceScreen({super.key});
@@ -88,12 +121,13 @@ class InvoiceScreen extends StatefulWidget {
 }
 
 class _InvoiceScreenState extends State<InvoiceScreen> {
-  // بيانات تجريبية (لاحقاً تأتي من قاعدة البيانات)
+  final Box _box = Hive.box(kInvoicesBox); // الوصول لقاعدة البيانات
+  
   final List<TrayType> trays = [
     TrayType(id: '1', name: 'صاج مستطيل كبير', defaultWeight: 1.500),
     TrayType(id: '2', name: 'صاج مدور وسط', defaultWeight: 1.200),
     TrayType(id: '3', name: 'طبق فويل صغير', defaultWeight: 0.050),
-    TrayType(id: '4', name: 'بدون صاج (وزن صافي)', defaultWeight: 0.0),
+    TrayType(id: '4', name: 'بدون صاج', defaultWeight: 0.0),
   ];
 
   final List<SweetType> sweets = [
@@ -103,14 +137,35 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
     SweetType(id: '4', name: 'أصابع زينب', price: 60),
   ];
 
-  // حالة الإدخال الحالية
   List<InvoiceItem> currentItems = [];
-  bool isReturnMode = false; // وضع المرتجعات
+  bool isReturnMode = false;
   SweetType? selectedSweet;
   TrayType? selectedTray;
   
   final TextEditingController _grossWeightController = TextEditingController();
-  final TextEditingController _trayWeightController = TextEditingController(); // لتعديل وزن الصاج
+  final TextEditingController _trayWeightController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData(); // استرجاع البيانات المحفوظة عند فتح التطبيق
+  }
+
+  // تحميل البيانات من Hive
+  void _loadData() {
+    List<dynamic>? savedList = _box.get('current_invoice');
+    if (savedList != null) {
+      setState(() {
+        currentItems = savedList.map((e) => InvoiceItem.fromJson(e)).toList();
+      });
+    }
+  }
+
+  // حفظ البيانات
+  void _saveData() {
+    List<Map<String, dynamic>> jsonList = currentItems.map((e) => e.toJson()).toList();
+    _box.put('current_invoice', jsonList);
+  }
 
   @override
   void dispose() {
@@ -119,12 +174,9 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
     super.dispose();
   }
 
-  // دالة إضافة البند
   void _addItem() {
     if (selectedSweet == null || _grossWeightController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الرجاء اختيار الصنف وإدخال الوزن')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الرجاء اختيار الصنف وإدخال الوزن')));
       return;
     }
 
@@ -132,64 +184,126 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
     double trayW = double.tryParse(_trayWeightController.text) ?? 0;
 
     if (gross <= trayW) {
-       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('خطأ: الوزن القائم أقل من وزن الصاج!')),
-      );
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('خطأ: الوزن القائم أقل من وزن الصاج!')));
       return;
     }
 
     setState(() {
       currentItems.add(InvoiceItem(
-        id: DateTime.now().toString(),
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
         sweet: selectedSweet!,
         tray: selectedTray,
         grossWeight: gross,
         trayWeightUsed: trayW,
         isReturn: isReturnMode,
       ));
-      
-      // تصفية الحقول بعد الإضافة
+      _saveData(); // حفظ تلقائي
       _grossWeightController.clear();
-      // لا نمسح نوع الصاج لتسهيل الإدخال المتكرر
     });
   }
 
-  // دالة حساب إجمالي الفاتورة
+  void _deleteItem(String id) {
+    setState(() {
+      currentItems.removeWhere((element) => element.id == id);
+      _saveData(); // حفظ التعديل
+    });
+  }
+
+  // دالة تصدير الإكسل
+  Future<void> _exportExcel() async {
+    if (currentItems.isEmpty) return;
+
+    var excel = Excel.createExcel();
+    Sheet sheet = excel['الفاتورة'];
+    
+    // إضافة العناوين
+    sheet.appendRow([
+      TextCellValue('م'), 
+      TextCellValue('الصنف'), 
+      TextCellValue('النوع'), 
+      TextCellValue('قائم'), 
+      TextCellValue('فارغ'), 
+      TextCellValue('صافي'), 
+      TextCellValue('السعر'), 
+      TextCellValue('الإجمالي')
+    ]);
+
+    // إضافة البيانات
+    int index = 1;
+    for (var item in currentItems) {
+      sheet.appendRow([
+        IntCellValue(index),
+        TextCellValue(item.sweet.name),
+        TextCellValue(item.isReturn ? 'مرتجع' : 'بيع'),
+        DoubleCellValue(item.grossWeight),
+        DoubleCellValue(item.trayWeightUsed),
+        DoubleCellValue(item.netWeight),
+        DoubleCellValue(item.sweet.price),
+        DoubleCellValue(item.totalPrice),
+      ]);
+      index++;
+    }
+
+    // إضافة المجموع النهائي
+    sheet.appendRow([
+      TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''),
+      TextCellValue('المجموع الكلي:'),
+      DoubleCellValue(_grandTotal)
+    ]);
+
+    // حفظ الملف والمشاركة
+    var fileBytes = excel.save();
+    if (fileBytes != null) {
+      final directory = await getApplicationDocumentsDirectory();
+      final path = '${directory.path}/invoice_${DateTime.now().millisecondsSinceEpoch}.xlsx';
+      File(path)
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(fileBytes);
+
+      // مشاركة الملف
+      await Share.shareXFiles([XFile(path)], text: 'فاتورة حلويات');
+    }
+  }
+
   double get _grandTotal => currentItems.fold(0, (sum, item) => sum + item.totalPrice);
 
   @override
   Widget build(BuildContext context) {
     var theme = Theme.of(context);
+    final currencyFormat = intl.NumberFormat.currency(symbol: 'ج.م', decimalDigits: 2);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('إدارة الموازين - منفذ 1'),
+        title: const Text('إدارة الموازين'),
         centerTitle: true,
         backgroundColor: theme.colorScheme.primaryContainer,
         actions: [
-          IconButton(onPressed: () {}, icon: const Icon(Icons.settings)), // للإعدادات لاحقاً
+          IconButton(
+            icon: const Icon(Icons.delete_forever), 
+            onPressed: () {
+              // زر مسح الفاتورة بالكامل
+              setState(() {
+                currentItems.clear();
+                _saveData();
+              });
+            },
+          )
         ],
       ),
       body: Column(
         children: [
-          // 1. منطقة الإدخال (الوزن)
           _buildInputSection(theme),
-          
           const Divider(height: 1),
-
-          // 2. قائمة العناصر المضافة
           Expanded(
             child: ListView.builder(
               itemCount: currentItems.length,
               itemBuilder: (context, index) {
-                final item = currentItems[currentItems.length - 1 - index]; // عرض الأحدث أولاً
-                return _buildListItem(item, theme);
+                final item = currentItems[currentItems.length - 1 - index];
+                return _buildListItem(item, theme, currencyFormat);
               },
             ),
           ),
-
-          // 3. الفوتر (الإجمالي وتصدير)
-          _buildFooter(theme),
+          _buildFooter(theme, currencyFormat),
         ],
       ),
     );
@@ -204,20 +318,17 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // زر التبديل بين بيع ومرتجع
             Row(
               children: [
                 Expanded(
                   child: SegmentedButton<bool>(
                     segments: const [
-                      ButtonSegment(value: false, label: Text('بيع (خروج)'), icon: Icon(Icons.outbox)),
-                      ButtonSegment(value: true, label: Text('مرتجع (دخول)'), icon: Icon(Icons.move_to_inbox)),
+                      ButtonSegment(value: false, label: Text('بيع'), icon: Icon(Icons.outbox)),
+                      ButtonSegment(value: true, label: Text('مرتجع'), icon: Icon(Icons.move_to_inbox)),
                     ],
                     selected: {isReturnMode},
                     onSelectionChanged: (Set<bool> newSelection) {
-                      setState(() {
-                        isReturnMode = newSelection.first;
-                      });
+                      setState(() => isReturnMode = newSelection.first);
                     },
                     style: ButtonStyle(
                       backgroundColor: MaterialStateProperty.resolveWith((states) {
@@ -232,16 +343,14 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
               ],
             ),
             const SizedBox(height: 16),
-
-            // اختيار الصنف والصاج
             Row(
               children: [
                 Expanded(
                   flex: 2,
                   child: DropdownButtonFormField<SweetType>(
-                    decoration: const InputDecoration(labelText: 'اختر الصنف', border: OutlineInputBorder()),
+                    decoration: const InputDecoration(labelText: 'الصنف', border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 5)),
                     value: selectedSweet,
-                    items: sweets.map((s) => DropdownMenuItem(value: s, child: Text(s.name))).toList(),
+                    items: sweets.map((s) => DropdownMenuItem(value: s, child: Text(s.name, style: const TextStyle(fontSize: 14)))).toList(),
                     onChanged: (val) => setState(() => selectedSweet = val),
                   ),
                 ),
@@ -249,16 +358,13 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
                 Expanded(
                   flex: 2,
                   child: DropdownButtonFormField<TrayType>(
-                    decoration: const InputDecoration(labelText: 'نوع الصاج', border: OutlineInputBorder()),
+                    decoration: const InputDecoration(labelText: 'الصاج', border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 5)),
                     value: selectedTray,
-                    items: trays.map((t) => DropdownMenuItem(value: t, child: Text(t.name))).toList(),
+                    items: trays.map((t) => DropdownMenuItem(value: t, child: Text(t.name, style: const TextStyle(fontSize: 14)))).toList(),
                     onChanged: (val) {
                       setState(() {
                         selectedTray = val;
-                        // تحديث حقل وزن الصاج تلقائياً عند الاختيار
-                        if (val != null) {
-                          _trayWeightController.text = val.defaultWeight.toString();
-                        }
+                        if (val != null) _trayWeightController.text = val.defaultWeight.toString();
                       });
                     },
                   ),
@@ -266,20 +372,13 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
               ],
             ),
             const SizedBox(height: 12),
-
-            // الأوزان
             Row(
               children: [
                 Expanded(
                   child: TextFormField(
                     controller: _trayWeightController,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'وزن الفارغ (كجم)',
-                      hintText: 'وزن الصاج',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.layers_outlined),
-                    ),
+                    decoration: const InputDecoration(labelText: 'الفارغ', border: OutlineInputBorder()),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -287,34 +386,23 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
                   child: TextFormField(
                     controller: _grossWeightController,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'الوزن القائم (كجم)',
-                      hintText: 'من الميزان',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.scale),
-                      filled: true,
-                    ),
+                    decoration: const InputDecoration(labelText: 'القائم', border: OutlineInputBorder(), filled: true),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 16),
-            
-            // زر الإضافة
             SizedBox(
               width: double.infinity,
-              height: 50,
+              height: 45,
               child: ElevatedButton.icon(
                 onPressed: _addItem,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: isReturnMode ? Colors.red : theme.colorScheme.primary,
                   foregroundColor: Colors.white,
                 ),
-                icon: const Icon(Icons.add_circle_outline),
-                label: Text(
-                  isReturnMode ? 'تسجيل مرتجع' : 'إضافة للفاتورة',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
+                icon: const Icon(Icons.add),
+                label: Text(isReturnMode ? 'تسجيل مرتجع' : 'إضافة', style: const TextStyle(fontWeight: FontWeight.bold)),
               ),
             ),
           ],
@@ -323,49 +411,27 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
     );
   }
 
-  Widget _buildListItem(InvoiceItem item, ThemeData theme) {
-    final currencyFormat = intl.NumberFormat.currency(symbol: 'ج.م', decimalDigits: 2);
-    
+  Widget _buildListItem(InvoiceItem item, ThemeData theme, intl.NumberFormat format) {
     return Dismissible(
       key: Key(item.id),
-      background: Container(color: Colors.red, alignment: Alignment.centerLeft, child: const Icon(Icons.delete, color: Colors.white)),
-      onDismissed: (direction) {
-        setState(() {
-          currentItems.removeWhere((element) => element.id == item.id);
-        });
-      },
+      background: Container(color: Colors.red, alignment: Alignment.centerLeft, child: const Padding(padding: EdgeInsets.only(left: 20), child: Icon(Icons.delete, color: Colors.white))),
+      onDismissed: (_) => _deleteItem(item.id),
       child: ListTile(
         leading: CircleAvatar(
           backgroundColor: item.isReturn ? Colors.red.shade100 : Colors.green.shade100,
-          child: Icon(item.isReturn ? Icons.reply : Icons.check, color: item.isReturn ? Colors.red : Colors.green),
+          child: Icon(item.isReturn ? Icons.reply : Icons.check, size: 20, color: item.isReturn ? Colors.red : Colors.green),
         ),
-        title: Text(item.sweet.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(
-          'قائم: ${item.grossWeight} - فارغ: ${item.trayWeightUsed} = صافي: ${item.netWeight.toStringAsFixed(3)} كجم',
-          style: TextStyle(color: Colors.grey[700], fontSize: 12),
-        ),
-        trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              currencyFormat.format(item.totalPrice.abs()),
-              style: TextStyle(
-                fontWeight: FontWeight.bold, 
-                color: item.isReturn ? Colors.red : theme.colorScheme.primary,
-                fontSize: 16,
-              ),
-            ),
-            if(item.isReturn) const Text('مرتجع', style: TextStyle(fontSize: 10, color: Colors.red)),
-          ],
+        title: Text(item.sweet.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        subtitle: Text('${item.grossWeight} - ${item.trayWeightUsed} = ${item.netWeight.toStringAsFixed(3)} كجم'),
+        trailing: Text(
+          format.format(item.totalPrice.abs()),
+          style: TextStyle(fontWeight: FontWeight.bold, color: item.isReturn ? Colors.red : theme.colorScheme.primary, fontSize: 15),
         ),
       ),
     );
   }
 
-  Widget _buildFooter(ThemeData theme) {
-    final currencyFormat = intl.NumberFormat.currency(symbol: 'ج.م', decimalDigits: 2);
-    
+  Widget _buildFooter(ThemeData theme, intl.NumberFormat format) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -378,37 +444,20 @@ class _InvoiceScreenState extends State<InvoiceScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('إجمالي الفاتورة:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              Text(
-                currencyFormat.format(_grandTotal),
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: theme.colorScheme.primary),
-              ),
+              const Text('الإجمالي:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(format.format(_grandTotal), style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: theme.colorScheme.primary)),
             ],
           ),
           const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    // هنا نضع كود الحفظ وتصدير الإكسيل لاحقاً
-                  },
-                  icon: const Icon(Icons.save),
-                  label: const Text('حفظ محلي'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    // كود المزامنة
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                  icon: const Icon(Icons.table_view),
-                  label: const Text('تصدير Excel'),
-                ),
-              ),
-            ],
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton.icon(
+              onPressed: _exportExcel, // ربط الزر بدالة التصدير
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+              icon: const Icon(Icons.table_view),
+              label: const Text('تصدير Excel ومشاركة', style: TextStyle(fontSize: 16)),
+            ),
           ),
         ],
       ),
