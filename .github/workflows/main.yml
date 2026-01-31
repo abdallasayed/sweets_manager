@@ -28,11 +28,15 @@ jobs:
         flutter create . --org com.sweets.manager
         flutter pub get
 
-    # --- هذه هي الخطوة الجديدة لحل المشكلة الجذرية ---
-    - name: Upgrade Kotlin Version
+    # --- الخطوة السحرية لإصلاح تكرار الكلاسات ---
+    - name: Fix Kotlin Duplicates
       run: |
-        # هذا الأمر يبحث عن الإصدار القديم ويستبدله بـ 1.9.0 داخل ملف الإعدادات
-        sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.0"/' android/build.gradle
+        # 1. تحديث متغير النسخة في الملف الرئيسي إلى 1.8.22
+        sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.8.22"/' android/build.gradle
+        
+        # 2. إجبار جميع المكتبات على استخدام نفس النسخة (1.8.22) لمنع التكرار
+        # نضيف هذا الكود إلى نهاية ملف android/app/build.gradle
+        echo "configurations.all { resolutionStrategy { force 'org.jetbrains.kotlin:kotlin-stdlib:1.8.22', 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22', 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22' } }" >> android/app/build.gradle
 
     - name: Build APK
       run: flutter build apk --release
