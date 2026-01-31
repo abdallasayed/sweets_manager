@@ -23,11 +23,15 @@ jobs:
         flutter-version: '3.19.0'
         channel: 'stable'
 
-    # هذه الخطوة ستقوم بإنشاء ملفات الأندرويد الناقصة بدلاً منك
     - name: Create Project Structure
       run: |
         flutter create . --org com.sweets.manager
         flutter pub get
+
+    # --- هذه هي الخطوة الجديدة لحل المشكلة ---
+    - name: Fix Kotlin Duplicates
+      run: |
+        echo "configurations.all { resolutionStrategy { force 'org.jetbrains.kotlin:kotlin-stdlib:1.9.0', 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.0', 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.0' } }" >> android/app/build.gradle
 
     - name: Build APK
       run: flutter build apk --release
